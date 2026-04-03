@@ -1,4 +1,12 @@
-import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
+import {
+  createApi,
+  fetchBaseQuery,
+  type FetchArgs,
+  type FetchBaseQueryError,
+  type FetchBaseQueryMeta,
+} from "@reduxjs/toolkit/query/react";
+import type { BaseQueryFn } from "@reduxjs/toolkit/query";
+import { getSession } from "next-auth/react";
 
 interface ApiResponse {
   data: JobProps[] | string;
@@ -11,21 +19,46 @@ interface ApiResponse {
   success: boolean;
 }
 
+interface PaginatedJobsResponse {
+  items: JobProps[];
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
+const rawBaseQuery = fetchBaseQuery({
+  baseUrl: `${
+    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
+  }/api/v1`,
+});
+
+const baseQuery: BaseQueryFn<
+  string | FetchArgs,
+  unknown,
+  FetchBaseQueryError,
+  object,
+  FetchBaseQueryMeta
+> = async (args, api, extraOptions) => {
+  const session = await getSession();
+  const token = (session as any)?.accessToken as string | undefined;
+
+  let request: FetchArgs;
+  if (typeof args === "string") request = { url: args };
+  else request = { ...args };
+
+  const headers = new Headers((request.headers as HeadersInit) || {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  request.headers = headers;
+
+  return rawBaseQuery(request, api, extraOptions);
+};
+
 export const JobApi = createApi({
   reducerPath: "jobApi",
-  baseQuery: fetchBaseQuery({
-    baseUrl: "http://localhost:8080/api/v1", // Update this URL
-    prepareHeaders: (headers, { getState, endpoint }) => {
-      // Apply Authorization header only for /jobs/matched endpoint
-      if (endpoint === "fetchMatchedJobs") {
-        const token = (getState() as any).auth?.token; // Adjust based on your auth slice
-        if (token) {
-          headers.set("Authorization", `Bearer ${token}`);
-        }
-      }
-      return headers;
-    },
-  }),
+  baseQuery,
   endpoints: (builder) => ({
     // Fetch all jobs (no authentication)
     fetchJobs: builder.query<JobProps[], JobQueryParams>({
@@ -54,11 +87,19 @@ export const JobApi = createApi({
           sort_order,
         },
       }),
+      transformResponse: (response: any): JobProps[] => {
+        // Backend returns StandardResponse{ data: { items: [...], ... } }
+        const d = response?.data;
+        if (Array.isArray(d)) return d as JobProps[]; // fallback if non-paginated
+        if (Array.isArray(d?.items)) return d.items as JobProps[];
+        if (Array.isArray(response)) return response as JobProps[];
+        return [];
+      },
     }),
 
     // Fetch matched jobs (requires authentication)
     fetchMatchedJobs: builder.query<
-      JobProps[],
+      PaginatedJobsResponse,
       { page?: number; limit?: number }
     >({
       query: (params) => ({
@@ -66,11 +107,17 @@ export const JobApi = createApi({
         method: "GET",
         params: { page: params.page ?? 1, limit: params.limit ?? 2 },
       }),
-      transformResponse: (response: ApiResponse) => {
-        if (Array.isArray(response.data)) {
-          return response.data;
-        }
-        return []; // Fallback if data is a string or unexpected format
+      transformResponse: (response: any): PaginatedJobsResponse => {
+        const d = response?.data || {};
+        return {
+          items: Array.isArray(d.items) ? d.items : [],
+          page: d.page ?? 1,
+          limit: d.limit ?? (Array.isArray(d.items) ? d.items.length : 0),
+          total: d.total ?? (Array.isArray(d.items) ? d.items.length : 0),
+          total_pages: d.total_pages ?? 1,
+          has_next: d.has_next ?? false,
+          has_prev: d.has_prev ?? false,
+        };
       },
     }),
   }),

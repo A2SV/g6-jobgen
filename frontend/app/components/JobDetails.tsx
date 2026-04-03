@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import JobCard from "./JobList"; // now using JobCard directly
+import { apiUrl } from "@/lib/api";
 
 interface JobData {
   id: string;
@@ -27,7 +28,7 @@ const JobDetails = ({ jobId }: { jobId: string }) => {
     async function fetchJob() {
       setLoading(true);
       try {
-        const res = await fetch(`http://localhost:8080/api/v1/jobs/${jobId}`);
+        const res = await fetch(apiUrl(`/api/v1/jobs/${jobId}`));
         const data = await res.json();
         const jobFromResponse =
           data?.data?.job ?? data?.data ?? data?.job ?? null;
